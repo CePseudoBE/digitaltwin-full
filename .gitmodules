@@ -1,0 +1,3 @@
+[submodule "digitaltwin-dataspace-ts"]
+	path = digitaltwin-dataspace-ts
+	url = https://github.com/FARI-brussels/digitaltwin-dataspace-ts.git
