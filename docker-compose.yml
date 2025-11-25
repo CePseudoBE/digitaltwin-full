@@ -115,7 +115,7 @@ services:
       DE_LIJN_API_KEY: ${DE_LIJN_API_KEY}
       STIB_API_KEY: ${STIB_API_KEY}
       TELRAAM_API_KEY: ${TELRAAM_API_KEY}
-      ENV NODE_OPTIONS: "--max-http-header-size=65536"
+      NODE_OPTIONS: "--max-http-header-size=65536"
 
   backend_postgres:
     container_name: backend_postgres
