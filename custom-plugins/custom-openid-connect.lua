@@ -28,6 +28,7 @@ local pcall             = pcall
 local concat            = table.concat
 
 local ngx_encode_base64 = ngx.encode_base64
+local ngx_decode_base64 = ngx.decode_base64
 
 -- Rate limiting
 local rate_limit_dict   = ngx.shared.rate_limit_dict
@@ -35,6 +36,61 @@ local rate_limit_dict   = ngx.shared.rate_limit_dict
 local plugin_name       = "custom-openid-connect"
 
 -- === identity helpers ===
+
+-- Decode JWT payload without signature verification (for role extraction only)
+local function decode_jwt_payload(token)
+    if not token then return nil end
+
+    local parts = {}
+    for part in string.gmatch(token, "[^%.]+") do
+        parts[#parts + 1] = part
+    end
+
+    if #parts ~= 3 then return nil end
+
+    -- Decode payload (second part), add padding if needed
+    local payload_b64 = parts[2]
+    local padding = #payload_b64 % 4
+    if padding > 0 then
+        payload_b64 = payload_b64 .. string.rep("=", 4 - padding)
+    end
+    -- Replace URL-safe chars
+    payload_b64 = payload_b64:gsub("-", "+"):gsub("_", "/")
+
+    local payload_json = ngx_decode_base64(payload_b64)
+    if not payload_json then return nil end
+
+    local ok, payload = pcall(core.json.decode, payload_json)
+    if not ok then return nil end
+
+    return payload
+end
+
+-- Check if user has a specific role (without full token validation)
+local function has_role_in_token(token, role_name, client_id)
+    local claims = decode_jwt_payload(token)
+    if not claims then return false end
+
+    -- Check realm roles
+    if claims.realm_access and type(claims.realm_access.roles) == "table" then
+        for _, r in ipairs(claims.realm_access.roles) do
+            if r == role_name then return true end
+        end
+    end
+
+    -- Check client roles
+    if claims.resource_access and client_id then
+        local ra = claims.resource_access[client_id]
+        if ra and type(ra.roles) == "table" then
+            for _, r in ipairs(ra.roles) do
+                if r == role_name then return true end
+            end
+        end
+    end
+
+    return false
+end
+
 local function normalize_roles(user_claims, client_id)
     -- Keycloak: realm roles + client roles pour le client courant
     local acc, seen = {}, {}
@@ -688,44 +744,60 @@ function _M.rewrite(plugin_conf, ctx)
         end
     end
 
+    -- Skip rate limiting for CORS preflight requests (OPTIONS)
+    -- These requests don't carry Authorization headers by design
+    local request_method = core.request.get_method(ctx)
+    if request_method == "OPTIONS" then
+        core.log.debug("Skipping rate limit for CORS preflight request")
+        return nil
+    end
+
     -- Rate limiting logic - moved to the beginning
     local client_ip = core.request.get_ip(ctx)
     local is_authenticated = false
+    local is_admin = false
 
     -- Check if request has a Bearer token (before authentication)
-    local has_token, _, _ = get_bearer_access_token(ctx)
+    local has_token, token, _ = get_bearer_access_token(ctx)
     if has_token then
         is_authenticated = true
+        -- Check if user has admin role (bypass rate limit)
+        is_admin = has_role_in_token(token, "admin", conf.client_id)
     end
 
-    -- Apply rate limits
-    local rate_key, limit
-    if is_authenticated then
-        -- Authenticated users: X requests per minute
-        rate_key = "auth:" .. client_ip
-        limit = conf.rate_limit.auth
+    -- Skip rate limiting for admin users
+    if is_admin then
+        core.log.debug("Skipping rate limit for admin user")
     else
-        -- Anonymous users: Y requests per minute
-        rate_key = "anon:" .. client_ip
-        limit = conf.rate_limit.anon
-    end
+        -- Apply rate limits
+        local rate_key, limit
+        if is_authenticated then
+            -- Authenticated users: X requests per minute
+            rate_key = "auth:" .. client_ip
+            limit = conf.rate_limit.auth
+        else
+            -- Anonymous users: Y requests per minute
+            rate_key = "anon:" .. client_ip
+            limit = conf.rate_limit.anon
+        end
 
-    if not check_rate_limit(rate_key, limit) then
-        local error_msg = string.format(
-            "Rate limit exceeded: max %d requests per minute for %s users",
-            limit,
-            is_authenticated and "authenticated" or "anonymous"
-        )
+        if not check_rate_limit(rate_key, limit) then
+            local error_msg = string.format(
+                "Rate limit exceeded: max %d requests per minute for %s users",
+                limit,
+                is_authenticated and "authenticated" or "anonymous"
+            )
 
-        core.log.warn("Rate limit exceeded for ", is_authenticated and "authenticated" or "anonymous",
-            " user from IP: ", client_ip)
+            core.log.warn("Rate limit exceeded for ", is_authenticated and "authenticated" or "anonymous",
+                " user from IP: ", client_ip)
 
-        ngx.header["X-RateLimit-Limit"] = limit
-        ngx.header["X-RateLimit-Remaining"] = "0"
-        ngx.header["Retry-After"] = "60"
+            ngx.header["X-RateLimit-Limit"] = limit
+            ngx.header["X-RateLimit-Remaining"] = "0"
+            ngx.header["Retry-After"] = "60"
 
-        return 429, core.json.encode({ error = error_msg })
-    end
+            return 429, core.json.encode({ error = error_msg })
+        end
+    end -- end of rate limiting block (skip for admin)
 
     local response, err, session, _
 
