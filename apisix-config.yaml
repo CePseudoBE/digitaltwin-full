@@ -40,3 +40,5 @@ nginx_config:
   access_log: "/dev/stdout"
   http_configuration_snippet: |
     lua_shared_dict rate_limit_dict 10m;
+    large_client_header_buffers 4 64k;
+    client_header_buffer_size 64k;
