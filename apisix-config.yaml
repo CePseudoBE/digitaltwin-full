@@ -24,6 +24,7 @@ plugins:
   - custom-openid-connect
   - limit-count
   - consumer-restriction
+  - cors
 
 plugin_attr:
   custom-openid-connect:
