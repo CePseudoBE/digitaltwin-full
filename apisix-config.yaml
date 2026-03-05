@@ -9,10 +9,10 @@ apisix:
 deployment:
   admin:
     allow_admin:
-      - 0.0.0.0/0
+      - 172.16.0.0/12
     admin_key:
       - name: "admin"
-        key: edd1c9f034335f136f87ad84b625c8f1
+        key: CHANGE_ME_GENERATE_A_SECURE_KEY
         role: admin
   etcd:
     host:

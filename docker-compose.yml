@@ -25,9 +25,6 @@ services:
     ports:
       - "9080:9080"
       - "9443:9443"
-      - "9180:9180"
-      - "9091:9091"
-      - "9092:9092"
     depends_on:
       etcd:
         condition: service_healthy
